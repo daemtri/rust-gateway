@@ -1,7 +1,7 @@
 use super::transmit::{MessageHeader, Transmitter};
-use anyhow::{anyhow, Error, Result};
+use anyhow::Result;
 use futures_util::SinkExt;
-use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
+use futures_util::{pin_mut, StreamExt};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -45,6 +45,7 @@ impl WsHandler {
                 match result {
                     Ok(msg) => {
                         if !msg.is_binary() {
+                            log::error!("message type is not binary");
                             break;
                         }
                         let data: Vec<u8> = msg.into_data();
@@ -56,14 +57,14 @@ impl WsHandler {
                                     .unwrap();
                                 match self.transmitter.dispatch(header, body).await {
                                     Err(err) => {
-                                        println!("dispatch message: {}", err);
+                                        log::error!("dispatch message: {}", err);
                                         break;
                                     }
                                     _ => {}
                                 }
                             }
                             Err(e) => {
-                                println!("Error receiving TCP message: {}", e);
+                                log::error!("Error receiving TCP message: {}", e);
                                 break;
                             }
                         }

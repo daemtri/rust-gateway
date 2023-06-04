@@ -19,8 +19,8 @@ const WEBSOCKET_UPGRADE: &str = "Upgrade: websocket";
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
-    let lis = TcpListener::bind("0.0.0.0:8080").await.unwrap();
-    log::info!("tcp listen on {}", "0.0.0.0:8080");
+    let lis = TcpListener::bind("0.0.0.0:8090").await.unwrap();
+    log::info!("tcp listen on {}", "0.0.0.0:8090");
 
     let transmitter = Arc::new(gate::transmit::Transmitter::new());
     let ws_handler = Arc::new(WsHandler::new(transmitter.clone()));
@@ -38,8 +38,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // Convert the request headers to a string
             let request = String::from_utf8_lossy(&buffer);
             if request.contains(WEBSOCKET_UPGRADE) {
+                log::info!("收到新的websocket协议连接请求: {}", socket_addr);
                 wh.handle_stream(tcp_stream, socket_addr).await;
             } else {
+                log::info!("收到新的tcp协议连接请求: {}", socket_addr);
                 th.handle_stream(tcp_stream, socket_addr).await;
             }
         });

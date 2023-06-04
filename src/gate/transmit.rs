@@ -75,15 +75,19 @@ impl Transmitter {
         } else {
             format!("http://{}:8090", app_name)
         };
-
+        let debug_address = address.clone();
         let channel = tonic::transport::Channel::from_shared(address).unwrap();
         async move {
-            let channel = channel.connect().await.unwrap();
+            let channel = channel
+                .connect()
+                .await
+                .expect(format!("连接主机出错: {}", debug_address).as_str());
             TransmitClient::new(channel)
         }
     }
 
     pub async fn dispatch(&self, header: MessageHeader, body: Vec<u8>) -> Result<()> {
+        log::info!("收到message id: {}", header.message_id);
         let app_id = (header.message_id >> 20) & 0xFFF; // 提取 app_id 的前 12 位
 
         let clients: tokio::sync::RwLockReadGuard<HashMap<u32, Mutex<TransmitClient<Channel>>>> =
