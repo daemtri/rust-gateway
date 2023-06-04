@@ -1,15 +1,13 @@
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use api::transmit_client::TransmitClient;
 use api::{DispatchReply, DispatchRequest};
 use serde::{Deserialize, Serialize};
 use serde_yaml;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tonic::transport::Channel;
 
 pub mod api {
@@ -26,7 +24,7 @@ struct ServiceEntry {
 
 pub struct Transmitter {
     services: HashMap<String, ServiceEntry>,
-    clients: RwLock<HashMap<u32, RefCell<TransmitClient<Channel>>>>,
+    clients: RwLock<HashMap<u32, Mutex<TransmitClient<Channel>>>>,
 }
 
 #[derive(Debug)]
@@ -56,11 +54,6 @@ impl Transmitter {
             services: apps_map,
             clients: RwLock::new(HashMap::new()),
         }
-    }
-
-    async fn get_client(&self, key: u32) -> RefCell<TransmitClient<tonic::transport::Channel>> {
-        let lock = self.clients.read().await;
-        lock.get(&key).unwrap().clone()
     }
 
     fn create_transmit_client(
@@ -93,20 +86,21 @@ impl Transmitter {
     pub async fn dispatch(&self, header: MessageHeader, body: Vec<u8>) -> Result<()> {
         let app_id = (header.message_id >> 20) & 0xFFF; // 提取 app_id 的前 12 位
 
-        let clients = self.clients.read().await;
+        let clients: tokio::sync::RwLockReadGuard<HashMap<u32, Mutex<TransmitClient<Channel>>>> =
+            self.clients.read().await;
         if clients.contains_key(&app_id) {
-            let client = self.get_client(app_id).await;
+            let client = clients.get(&app_id).unwrap();
             do_dispatch(client, header, body).await?;
         } else {
             drop(clients);
             let mut clients = self.clients.write().await;
             if !clients.contains_key(&app_id) {
                 let client = self.create_transmit_client(app_id).await;
-                clients.insert(123, RefCell::new(client));
+                clients.insert(123, Mutex::new(client));
             }
             drop(clients);
             let clients = self.clients.read().await;
-            let client = self.get_client(app_id).await;
+            let client = clients.get(&app_id).unwrap();
             do_dispatch(client, header, body).await?;
         }
 
@@ -115,13 +109,16 @@ impl Transmitter {
 }
 
 async fn do_dispatch(
-    client: RefCell<TransmitClient<tonic::transport::Channel>>,
+    client: &Mutex<TransmitClient<tonic::transport::Channel>>,
     header: MessageHeader,
     body: Vec<u8>,
 ) -> Result<()> {
-    client.borrow_mut().dispatch(DispatchRequest {
-        msgid: header.message_id as i32,
-        data: body,
-    });
+    let mut client = client.lock().await;
+    client
+        .dispatch(DispatchRequest {
+            msgid: header.message_id as i32,
+            data: body,
+        })
+        .await?;
     Ok(())
 }
