@@ -1,6 +1,6 @@
 use anyhow::Result;
 use api::transmit_client::TransmitClient;
-use api::{DispatchReply, DispatchRequest};
+use api::DispatchRequest;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use std::collections::HashMap;
