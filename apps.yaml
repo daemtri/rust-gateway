@@ -1,0 +1,4 @@
+- id: "1"
+  name: "app011"
+  endpoints:
+    - grpc://127.0.0.1:8080

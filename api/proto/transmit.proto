@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "io.grpc.examples.helloworld";
+option java_outer_classname = "HelloWorldProto";
+
+package transmit;
+
+// The greeting service definition.
+service Transmit {
+  // Sends a greeting
+  rpc Dispatch (DispatchRequest) returns (DispatchReply) {}
+}
+
+// The request message containing the user's name.
+message DispatchRequest {
+  int32 msgid = 1;
+  bytes data = 2;
+}
+
+// The response message containing the greetings
+message DispatchReply {
+  bytes data = 1;
+}
