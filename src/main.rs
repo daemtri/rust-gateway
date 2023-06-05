@@ -36,12 +36,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let request = String::from_utf8_lossy(&buffer);
             if request.contains(WEBSOCKET_UPGRADE) {
                 log::info!("收到新的websocket协议连接请求: {}", socket_addr);
-                let ws_handler = WebsocketStreamHandler::new(transmitter);
-                ws_handler.handle_stream(tcp_stream, socket_addr).await;
+                WebsocketStreamHandler::new(transmitter)
+                    .handle_stream(tcp_stream, socket_addr)
+                    .await;
             } else {
                 log::info!("收到新的tcp协议连接请求: {}", socket_addr);
-                let tcp_handler = TcpStreamHandler::new(transmitter);
-                tcp_handler.handle_stream(tcp_stream, socket_addr).await;
+                TcpStreamHandler::new(transmitter)
+                    .handle_stream(tcp_stream, socket_addr)
+                    .await;
             }
         });
     }
