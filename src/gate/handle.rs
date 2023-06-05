@@ -1,8 +1,7 @@
-use super::transmit::{MessageHeader, Transmitter};
+use super::transmit::{self, MessageHeader, Transmitter};
 use anyhow::Result;
 use futures_util::SinkExt;
 use futures_util::{pin_mut, StreamExt};
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -20,24 +19,28 @@ enum HandleError {
     MessageSizeError(usize),
 }
 
-struct StreamHandler {
+struct DispatchAgent {
     transmitter: Arc<Transmitter>,
 }
 
-impl StreamHandler {
+impl DispatchAgent {
     fn new(transmitter: Arc<Transmitter>) -> Self {
-        StreamHandler { transmitter }
+        DispatchAgent { transmitter }
+    }
+    async fn dispatch(&self, header: transmit::MessageHeader, body: Vec<u8>) -> Result<()> {
+        // TODO: 处理登录状态
+        self.transmitter.dispatch(header, body).await
     }
 }
 
 pub struct WebsocketStreamHandler {
-    base: StreamHandler,
+    agent: DispatchAgent,
 }
 
 impl WebsocketStreamHandler {
     pub fn new(transmitter: Arc<Transmitter>) -> WebsocketStreamHandler {
         WebsocketStreamHandler {
-            base: StreamHandler::new(transmitter),
+            agent: DispatchAgent::new(transmitter),
         }
     }
 
@@ -67,7 +70,7 @@ impl WebsocketStreamHandler {
                                     .send(Message::Binary("hello world".as_bytes().to_vec()))
                                     .await
                                     .unwrap();
-                                match self.base.transmitter.dispatch(header, body).await {
+                                match self.agent.dispatch(header, body).await {
                                     Err(err) => {
                                         log::error!("dispatch message: {}", err);
                                         break;
@@ -111,13 +114,13 @@ async fn read_ws_frame(data: Vec<u8>) -> Result<(MessageHeader, Vec<u8>)> {
 }
 
 pub struct TcpStreamHandler {
-    base: StreamHandler,
+    agent: DispatchAgent,
 }
 
 impl TcpStreamHandler {
     pub fn new(transmitter: Arc<Transmitter>) -> TcpStreamHandler {
         TcpStreamHandler {
-            base: StreamHandler::new(transmitter),
+            agent: DispatchAgent::new(transmitter),
         }
     }
 
@@ -134,7 +137,7 @@ impl TcpStreamHandler {
                         log::error!("Failed to send TCP message: {}, addr: {}", e, socket_addr);
                         break;
                     }
-                    match self.base.transmitter.dispatch(header, body).await {
+                    match self.agent.dispatch(header, body).await {
                         Err(err) => {
                             log::error!("dispatch message: {}", err);
                             break;
