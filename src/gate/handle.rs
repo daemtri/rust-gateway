@@ -20,13 +20,25 @@ enum HandleError {
     MessageSizeError(usize),
 }
 
-pub struct WsHandler {
+struct StreamHandler {
     transmitter: Arc<Transmitter>,
 }
 
-impl WsHandler {
-    pub fn new(transmitter: Arc<Transmitter>) -> WsHandler {
-        WsHandler { transmitter }
+impl StreamHandler {
+    fn new(transmitter: Arc<Transmitter>) -> Self {
+        StreamHandler { transmitter }
+    }
+}
+
+pub struct WebsocketStreamHandler {
+    base: StreamHandler,
+}
+
+impl WebsocketStreamHandler {
+    pub fn new(transmitter: Arc<Transmitter>) -> WebsocketStreamHandler {
+        WebsocketStreamHandler {
+            base: StreamHandler::new(transmitter),
+        }
     }
 
     pub async fn handle_stream(&self, tcp_stream: TcpStream, socket_addr: SocketAddr) {
@@ -55,7 +67,7 @@ impl WsHandler {
                                     .send(Message::Binary("hello world".as_bytes().to_vec()))
                                     .await
                                     .unwrap();
-                                match self.transmitter.dispatch(header, body).await {
+                                match self.base.transmitter.dispatch(header, body).await {
                                     Err(err) => {
                                         log::error!("dispatch message: {}", err);
                                         break;
@@ -98,13 +110,15 @@ async fn read_ws_frame(data: Vec<u8>) -> Result<(MessageHeader, Vec<u8>)> {
     Ok((message_header, body_buffer))
 }
 
-pub struct TcpHandler {
-    transmitter: Arc<Transmitter>,
+pub struct TcpStreamHandler {
+    base: StreamHandler,
 }
 
-impl TcpHandler {
-    pub fn new(transmitter: Arc<Transmitter>) -> TcpHandler {
-        TcpHandler { transmitter }
+impl TcpStreamHandler {
+    pub fn new(transmitter: Arc<Transmitter>) -> TcpStreamHandler {
+        TcpStreamHandler {
+            base: StreamHandler::new(transmitter),
+        }
     }
 
     pub async fn handle_stream(&self, tcp_stream: TcpStream, socket_addr: SocketAddr) {
@@ -120,7 +134,7 @@ impl TcpHandler {
                         log::error!("Failed to send TCP message: {}, addr: {}", e, socket_addr);
                         break;
                     }
-                    match self.transmitter.dispatch(header, body).await {
+                    match self.base.transmitter.dispatch(header, body).await {
                         Err(err) => {
                             log::error!("dispatch message: {}", err);
                             break;
