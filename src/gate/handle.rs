@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::ReadHalf;
-use tokio::time::{timeout, Instant};
+use tokio::time::timeout;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -61,8 +61,8 @@ impl WebsocketStreamHandler {
 
         loop {
             let msg_timer = timeout(HEARTBEAT_INTERVAL, incoming.next());
-            match msg_timer.await.unwrap() {
-                Some(Ok(msg)) => match read_ws_frame(msg).await {
+            match msg_timer.await {
+                Ok(Some(Ok(msg))) => match read_ws_frame(msg).await {
                     Ok((header, body)) => {
                         outgoing
                             .send(Message::Binary("hello world".as_bytes().to_vec()))
@@ -81,10 +81,14 @@ impl WebsocketStreamHandler {
                         break;
                     }
                 },
-                Some(Err(err)) => {
+                Ok(Some(Err(err))) => {
                     log::error!("read ws incoming error {}, addr {}", err, addr);
                 }
-                None => {
+                // 这里有问题
+                Ok(None) => {
+                    continue;
+                }
+                Err(_) => {
                     // 超时
                 }
             }
