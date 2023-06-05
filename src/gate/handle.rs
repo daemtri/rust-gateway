@@ -1,11 +1,12 @@
-use super::transmit::{self, MessageHeader, Transmitter};
+use super::transmit::{MessageHeader, TransmitAgent, Transmitter};
 use anyhow::Result;
-use futures_util::SinkExt;
-use futures_util::{pin_mut, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::io::ReadHalf;
+use tokio::time::timeout;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -13,44 +14,24 @@ use tokio::{
 use tokio_tungstenite::{accept_async, WebSocketStream};
 use tungstenite::protocol::Message;
 
+const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Error, Debug)]
 enum HandleError {
     #[error("消息长度错误 {0}")]
     MessageSizeError(usize),
-}
-
-// Authority 认证信息
-struct Authority {}
-
-struct DispatchAgent {
-    transmitter: Arc<Transmitter>,
-    auth: Option<Authority>,
-}
-
-impl DispatchAgent {
-    fn new(transmitter: Arc<Transmitter>) -> Self {
-        DispatchAgent {
-            transmitter,
-            auth: None,
-        }
-    }
-    async fn dispatch(&self, header: transmit::MessageHeader, body: Vec<u8>) -> Result<()> {
-        if self.auth.is_none() {
-            log::info!("未登录")
-        }
-        // TODO: 处理登录状态
-        self.transmitter.dispatch(header, body).await
-    }
+    #[error("消息类型不是二进制")]
+    MessageTypeNotBinary,
 }
 
 pub struct WebsocketStreamHandler {
-    agent: DispatchAgent,
+    agent: TransmitAgent,
 }
 
 impl WebsocketStreamHandler {
     pub fn new(transmitter: Arc<Transmitter>) -> WebsocketStreamHandler {
         WebsocketStreamHandler {
-            agent: DispatchAgent::new(transmitter),
+            agent: TransmitAgent::new(transmitter),
         }
     }
 
@@ -60,40 +41,46 @@ impl WebsocketStreamHandler {
     }
 
     async fn handle_websocket(&self, ws_stream: WebSocketStream<TcpStream>, addr: SocketAddr) {
-        // 处理WebSocket连接的代码
-        // 例如，可以使用`ws_stream`来发送和接收WebSocket消息
-        // 这里只是简单地打印收到的消息并回显给客户端
-        let (mut outgoing, incoming) = ws_stream.split();
-        pin_mut!(incoming);
+        let (mut outgoing, mut incoming) = ws_stream.split();
+        // pin_mut!(incoming);
+
+        // 设置超时
+        let auth_result = timeout(AUTH_TIMEOUT, async {
+            let msg = incoming.next().await.unwrap().unwrap();
+            let (header, body) = read_ws_frame(msg).await.unwrap();
+            self.agent.auth(header, body).await.unwrap();
+            anyhow::Ok(())
+        })
+        .await;
+
+        if auth_result.is_err() {
+            log::error!("Authentication timeout");
+            let _ = outgoing.close().await;
+            return;
+        }
+
         loop {
             if let Some(result) = incoming.next().await {
                 match result {
-                    Ok(msg) => {
-                        if !msg.is_binary() {
-                            log::error!("message type is not binary");
+                    Ok(msg) => match read_ws_frame(msg).await {
+                        Ok((header, body)) => {
+                            outgoing
+                                .send(Message::Binary("hello world".as_bytes().to_vec()))
+                                .await
+                                .unwrap();
+                            match self.agent.dispatch(header, body).await {
+                                Err(err) => {
+                                    log::error!("dispatch message: {}", err);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Error receiving TCP message: {}", e);
                             break;
                         }
-                        let data: Vec<u8> = msg.into_data();
-                        match read_ws_frame(data).await {
-                            Ok((header, body)) => {
-                                outgoing
-                                    .send(Message::Binary("hello world".as_bytes().to_vec()))
-                                    .await
-                                    .unwrap();
-                                match self.agent.dispatch(header, body).await {
-                                    Err(err) => {
-                                        log::error!("dispatch message: {}", err);
-                                        break;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Error receiving TCP message: {}", e);
-                                break;
-                            }
-                        }
-                    }
+                    },
                     Err(err) => {
                         log::error!("read ws incoming error {}, addr {}", err, addr);
                     }
@@ -103,7 +90,11 @@ impl WebsocketStreamHandler {
     }
 }
 
-async fn read_ws_frame(data: Vec<u8>) -> Result<(MessageHeader, Vec<u8>)> {
+async fn read_ws_frame(msg: Message) -> Result<(MessageHeader, Vec<u8>)> {
+    if !msg.is_binary() {
+        return Err(HandleError::MessageTypeNotBinary.into());
+    }
+    let data: Vec<u8> = msg.into_data();
     if data.len() < 8 {
         return Err(HandleError::MessageSizeError(data.len()).into());
     }
@@ -124,21 +115,32 @@ async fn read_ws_frame(data: Vec<u8>) -> Result<(MessageHeader, Vec<u8>)> {
 }
 
 pub struct TcpStreamHandler {
-    agent: DispatchAgent,
+    agent: TransmitAgent,
 }
 
 impl TcpStreamHandler {
     pub fn new(transmitter: Arc<Transmitter>) -> TcpStreamHandler {
         TcpStreamHandler {
-            agent: DispatchAgent::new(transmitter),
+            agent: TransmitAgent::new(transmitter),
         }
     }
 
     pub async fn handle_stream(&self, tcp_stream: TcpStream, socket_addr: SocketAddr) {
-        // 处理TCP连接的代码
-        // 例如，可以读取和写入TCP数据流
-        // 这里只是简单地打印收到的消息并回显给客户端
         let (mut reader, mut writer) = tokio::io::split(tcp_stream);
+
+        // 设置超时
+        let auth_result = timeout(AUTH_TIMEOUT, async {
+            let (header, body) = read_tcp_frame(&mut reader).await.unwrap();
+            self.agent.auth(header, body).await.unwrap();
+            anyhow::Ok(())
+        })
+        .await;
+
+        if auth_result.is_err() {
+            log::error!("Authentication timeout");
+            let _ = writer.shutdown().await;
+            return;
+        }
 
         loop {
             match read_tcp_frame(&mut reader).await {
