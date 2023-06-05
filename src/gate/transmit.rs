@@ -99,7 +99,7 @@ impl Transmitter {
             let mut clients = self.clients.write().await;
             if !clients.contains_key(&app_id) {
                 let client = self.create_transmit_client(app_id).await;
-                clients.insert(123, Mutex::new(client));
+                clients.insert(app_id, Mutex::new(client));
             }
             drop(clients);
             let clients = self.clients.read().await;

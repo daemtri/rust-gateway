@@ -19,8 +19,9 @@ const WEBSOCKET_UPGRADE: &str = "Upgrade: websocket";
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
-    let lis = TcpListener::bind("0.0.0.0:8090").await.unwrap();
-    log::info!("tcp listen on {}", "0.0.0.0:8090");
+    let addr = "0.0.0.0:8080";
+    let lis = TcpListener::bind(addr).await.unwrap();
+    log::info!("tcp listen on {}", addr);
 
     let transmitter = Arc::new(gate::transmit::Transmitter::new());
     let ws_handler = Arc::new(WsHandler::new(transmitter.clone()));

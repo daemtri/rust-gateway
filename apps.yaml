@@ -2,4 +2,4 @@
   name: "app011"
   alias: "lobby"
   endpoints:
-    - grpc://127.0.0.1:8080
+    - grpc://127.0.0.1:8090
