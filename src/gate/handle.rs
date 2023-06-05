@@ -14,7 +14,7 @@ use tokio::{
 use tokio_tungstenite::{accept_async, WebSocketStream};
 use tungstenite::protocol::Message;
 
-const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Error, Debug)]
