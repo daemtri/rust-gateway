@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::ReadHalf;
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -36,12 +36,12 @@ impl WebsocketStreamHandler {
         }
     }
 
-    pub async fn handle_stream(&self, tcp_stream: TcpStream, socket_addr: SocketAddr) {
+    pub async fn handle_stream(&mut self, tcp_stream: TcpStream, socket_addr: SocketAddr) {
         let ws_stream = accept_async(tcp_stream).await.unwrap();
         self.handle_websocket(ws_stream, socket_addr).await;
     }
 
-    async fn handle_websocket(&self, ws_stream: WebSocketStream<TcpStream>, addr: SocketAddr) {
+    async fn handle_websocket(&mut self, ws_stream: WebSocketStream<TcpStream>, addr: SocketAddr) {
         let (mut outgoing, mut incoming) = ws_stream.split();
         // pin_mut!(incoming);
 
@@ -59,11 +59,21 @@ impl WebsocketStreamHandler {
             return;
         }
 
+        // 启动心跳计时器
+        let mut last_message_time = Instant::now();
         loop {
-            let msg_timer = timeout(HEARTBEAT_INTERVAL, incoming.next());
+            // 检查心跳超时
+            let elapsed = Instant::now().duration_since(last_message_time);
+            if elapsed >= HEARTBEAT_INTERVAL {
+                // 心跳超时，断开连接
+                log::debug!("Heartbeat timeout");
+                break;
+            }
+            let msg_timer = timeout(HEARTBEAT_INTERVAL - elapsed, incoming.next());
             match msg_timer.await {
                 Ok(Some(Ok(msg))) => match read_ws_frame(msg).await {
                     Ok((header, body)) => {
+                        last_message_time = Instant::now();
                         outgoing
                             .send(Message::Binary("hello world".as_bytes().to_vec()))
                             .await
@@ -78,18 +88,19 @@ impl WebsocketStreamHandler {
                     }
                     Err(e) => {
                         log::error!("Error receiving TCP message: {}", e);
-                        break;
+                        continue;
                     }
                 },
                 Ok(Some(Err(err))) => {
                     log::error!("read ws incoming error {}, addr {}", err, addr);
+                    continue;
                 }
                 // 这里有问题
                 Ok(None) => {
                     continue;
                 }
-                Err(_) => {
-                    // 超时
+                Err(_e) => {
+                    continue;
                 }
             }
         }
@@ -131,7 +142,7 @@ impl TcpStreamHandler {
         }
     }
 
-    pub async fn handle_stream(&self, tcp_stream: TcpStream, socket_addr: SocketAddr) {
+    pub async fn handle_stream(&mut self, tcp_stream: TcpStream, socket_addr: SocketAddr) {
         let (mut reader, mut writer) = tokio::io::split(tcp_stream);
 
         // 设置超时
@@ -142,15 +153,28 @@ impl TcpStreamHandler {
         })
         .await;
 
-        if auth_result.is_err() {
+        if !auth_result.is_ok() {
             log::error!("Authentication timeout");
             let _ = writer.shutdown().await;
             return;
         }
 
+        // 启动心跳计时器
+        let mut last_message_time = Instant::now();
+
         loop {
-            match read_tcp_frame(&mut reader).await {
-                Ok((header, body)) => {
+            // 检查心跳超时
+            let elapsed = Instant::now().duration_since(last_message_time);
+            if elapsed >= HEARTBEAT_INTERVAL {
+                // 心跳超时，断开连接
+                log::debug!("Heartbeat timeout");
+                break;
+            }
+            log::debug!("没有超时，继续尝试读取消息");
+            let msg_timer = timeout(HEARTBEAT_INTERVAL - elapsed, read_tcp_frame(&mut reader));
+            match msg_timer.await {
+                Ok(Ok((header, body))) => {
+                    last_message_time = Instant::now();
                     if let Err(e) = writer.write_all(b"hello world").await {
                         log::error!("Failed to send TCP message: {}, addr: {}", e, socket_addr);
                         break;
@@ -158,14 +182,19 @@ impl TcpStreamHandler {
                     match self.agent.dispatch(header, body).await {
                         Err(err) => {
                             log::error!("dispatch message: {}", err);
-                            break;
+                            continue;
                         }
-                        _ => {}
+                        _ => {
+                            continue;
+                        }
                     }
                 }
-                Err(e) => {
-                    log::error!("Error receiving TCP message: {}", e);
-                    break;
+                Ok(Err(err)) => {
+                    log::error!("Error receiving TCP message: {}", err);
+                    continue;
+                }
+                Err(_e) => {
+                    continue;
                 }
             }
         }

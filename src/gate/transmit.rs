@@ -145,12 +145,10 @@ impl TransmitAgent {
         }
     }
 
-    pub async fn auth(&self, header: MessageHeader, body: Vec<u8>) -> Result<()> {
-        if self.auth.is_none() {
-            log::info!("未登录")
-        }
-        // TODO: 处理登录状态
-        self.transmitter.dispatch(header, body).await
+    pub async fn auth(&mut self, _header: MessageHeader, _body: Vec<u8>) -> Result<()> {
+        log::info!("收到登录请求 {}", _header.message_id);
+        self.auth = Some(Authority {});
+        Ok(())
     }
 
     pub async fn dispatch(&self, header: MessageHeader, body: Vec<u8>) -> Result<()> {
