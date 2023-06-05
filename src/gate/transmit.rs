@@ -109,18 +109,16 @@ impl Transmitter {
 }
 
 async fn do_dispatch(channel: &Channel, header: MessageHeader, body: Vec<u8>) -> Result<()> {
-    let mut client =
-        BusinessServiceClient::with_interceptor(channel.clone(), |mut req: tonic::Request<()>| {
-            let user_id = "123"; // 从某个地方获取用户 ID
-            req.metadata_mut()
-                .insert("user_id", FromStr::from_str(user_id).unwrap());
-            Ok(req)
-        });
-    client
-        .dispatch(DispatchRequest {
-            msgid: header.message_id as i32,
-            data: body,
-        })
-        .await?;
+    BusinessServiceClient::with_interceptor(channel.clone(), |mut req: tonic::Request<()>| {
+        let user_id = "123"; // 从某个地方获取用户 ID
+        req.metadata_mut()
+            .insert("user_id", FromStr::from_str(user_id).unwrap());
+        Ok(req)
+    })
+    .dispatch(DispatchRequest {
+        msgid: header.message_id as i32,
+        data: body,
+    })
+    .await?;
     Ok(())
 }
