@@ -59,7 +59,7 @@ impl Transmitter {
     fn create_transmit_client(
         &self,
         app_id: u32,
-    ) -> impl Future<Output = TransmitClient<tonic::transport::Channel>> + Send {
+    ) -> impl Future<Output = TransmitClient<Channel>> + Send {
         let app_name = format!("app{:03x}", app_id);
         let address = if self.services.contains_key(&app_name) {
             let mut ep = String::new();
@@ -76,7 +76,7 @@ impl Transmitter {
             format!("http://{}:8090", app_name)
         };
         let debug_address = address.clone();
-        let channel = tonic::transport::Channel::from_shared(address).unwrap();
+        let channel = Channel::from_shared(address).unwrap();
         async move {
             let channel = channel
                 .connect()
@@ -90,8 +90,7 @@ impl Transmitter {
         log::info!("收到message id: {}", header.message_id);
         let app_id = (header.message_id >> 20) & 0xFFF; // 提取 app_id 的前 12 位
 
-        let clients: tokio::sync::RwLockReadGuard<HashMap<u32, Mutex<TransmitClient<Channel>>>> =
-            self.clients.read().await;
+        let clients = self.clients.read().await;
         if clients.contains_key(&app_id) {
             let client = clients.get(&app_id).unwrap();
             do_dispatch(client, header, body).await?;
@@ -113,7 +112,7 @@ impl Transmitter {
 }
 
 async fn do_dispatch(
-    client: &Mutex<TransmitClient<tonic::transport::Channel>>,
+    client: &Mutex<TransmitClient<Channel>>,
     header: MessageHeader,
     body: Vec<u8>,
 ) -> Result<()> {
