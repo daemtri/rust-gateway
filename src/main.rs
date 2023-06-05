@@ -33,6 +33,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 return;
             }
             // Convert the request headers to a string
+            // TODO: 这里第一条消息就要判断超时
             let request = String::from_utf8_lossy(&buffer);
             if request.contains(WEBSOCKET_UPGRADE) {
                 log::info!("收到新的websocket协议连接请求: {}", socket_addr);
