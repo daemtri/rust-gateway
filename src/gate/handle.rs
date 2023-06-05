@@ -46,45 +46,46 @@ impl WebsocketStreamHandler {
         // pin_mut!(incoming);
 
         // 设置超时
-        let auth_result = timeout(AUTH_TIMEOUT, async {
+        let auth_timer = timeout(AUTH_TIMEOUT, async {
             let msg = incoming.next().await.unwrap().unwrap();
             let (header, body) = read_ws_frame(msg).await.unwrap();
             self.agent.auth(header, body).await.unwrap();
             anyhow::Ok(())
-        })
-        .await;
+        });
 
-        if auth_result.is_err() {
+        if !auth_timer.await.is_ok() {
             log::error!("Authentication timeout");
             let _ = outgoing.close().await;
             return;
         }
 
         loop {
-            if let Some(result) = incoming.next().await {
-                match result {
-                    Ok(msg) => match read_ws_frame(msg).await {
-                        Ok((header, body)) => {
-                            outgoing
-                                .send(Message::Binary("hello world".as_bytes().to_vec()))
-                                .await
-                                .unwrap();
-                            match self.agent.dispatch(header, body).await {
-                                Err(err) => {
-                                    log::error!("dispatch message: {}", err);
-                                    break;
-                                }
-                                _ => {}
+            let msg_timer = timeout(HEARTBEAT_INTERVAL, incoming.next());
+            match msg_timer.await.unwrap() {
+                Some(Ok(msg)) => match read_ws_frame(msg).await {
+                    Ok((header, body)) => {
+                        outgoing
+                            .send(Message::Binary("hello world".as_bytes().to_vec()))
+                            .await
+                            .unwrap();
+                        match self.agent.dispatch(header, body).await {
+                            Err(err) => {
+                                log::error!("dispatch message: {}", err);
+                                break;
                             }
+                            _ => {}
                         }
-                        Err(e) => {
-                            log::error!("Error receiving TCP message: {}", e);
-                            break;
-                        }
-                    },
-                    Err(err) => {
-                        log::error!("read ws incoming error {}, addr {}", err, addr);
                     }
+                    Err(e) => {
+                        log::error!("Error receiving TCP message: {}", e);
+                        break;
+                    }
+                },
+                Some(Err(err)) => {
+                    log::error!("read ws incoming error {}, addr {}", err, addr);
+                }
+                None => {
+                    // 超时
                 }
             }
         }
