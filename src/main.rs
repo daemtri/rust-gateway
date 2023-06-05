@@ -23,6 +23,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let lis = TcpListener::bind(addr).await.unwrap();
     log::info!("tcp listen on {}", addr);
 
+    // TODO：为每一个链接New一个Handler
     let transmitter = Arc::new(gate::transmit::Transmitter::new());
     let ws_handler = Arc::new(WsHandler::new(transmitter.clone()));
     let tcp_handler = Arc::new(TcpHandler::new(transmitter.clone()));
