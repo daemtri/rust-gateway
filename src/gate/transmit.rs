@@ -7,8 +7,10 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
+use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
+use tonic::Request;
 
 pub mod api {
     tonic::include_proto!("transmit");
@@ -24,7 +26,7 @@ struct ServiceEntry {
 
 pub struct Transmitter {
     services: HashMap<String, ServiceEntry>,
-    clients: RwLock<HashMap<u32, Mutex<BusinessServiceClient<Channel>>>>, // TODO: 取消TransmitClient的锁
+    clients: RwLock<HashMap<u32, Channel>>, // TODO: 取消TransmitClient的锁
 }
 
 #[derive(Debug)]
@@ -56,10 +58,7 @@ impl Transmitter {
         }
     }
 
-    fn create_transmit_client(
-        &self,
-        app_id: u32,
-    ) -> impl Future<Output = BusinessServiceClient<Channel>> + Send {
+    fn create_transmit_channel(&self, app_id: u32) -> impl Future<Output = Channel> + Send {
         let app_name = format!("app{:03x}", app_id);
         let address = if self.services.contains_key(&app_name) {
             let mut ep = String::new();
@@ -76,13 +75,12 @@ impl Transmitter {
             format!("http://{}:8090", app_name)
         };
         let debug_address = address.clone();
-        let channel = Channel::from_shared(address).unwrap();
+        let channel: tonic::transport::Endpoint = Channel::from_shared(address).unwrap();
         async move {
-            let channel = channel
+            channel
                 .connect()
                 .await
-                .expect(format!("连接主机出错: {}", debug_address).as_str());
-            BusinessServiceClient::new(channel)
+                .expect(format!("连接主机出错: {}", debug_address).as_str())
         }
     }
 
@@ -92,31 +90,27 @@ impl Transmitter {
 
         let clients = self.clients.read().await;
         if clients.contains_key(&app_id) {
-            let client = clients.get(&app_id).unwrap();
-            do_dispatch(client, header, body).await?;
+            let channel = clients.get(&app_id).unwrap();
+            do_dispatch(channel, header, body).await?;
         } else {
             drop(clients);
             let mut clients = self.clients.write().await;
             if !clients.contains_key(&app_id) {
-                let client = self.create_transmit_client(app_id).await;
-                clients.insert(app_id, Mutex::new(client));
+                let channel = self.create_transmit_channel(app_id).await;
+                clients.insert(app_id, channel);
             }
             drop(clients);
             let clients = self.clients.read().await;
-            let client = clients.get(&app_id).unwrap();
-            do_dispatch(client, header, body).await?;
+            let channel = clients.get(&app_id).unwrap();
+            do_dispatch(channel, header, body).await?;
         }
 
         Ok(())
     }
 }
 
-async fn do_dispatch(
-    client: &Mutex<BusinessServiceClient<Channel>>,
-    header: MessageHeader,
-    body: Vec<u8>,
-) -> Result<()> {
-    let mut client = client.lock().await;
+async fn do_dispatch(channel: &Channel, header: MessageHeader, body: Vec<u8>) -> Result<()> {
+    let mut client = BusinessServiceClient::new(channel.clone());
     client
         .dispatch(DispatchRequest {
             msgid: header.message_id as i32,
