@@ -19,15 +19,25 @@ enum HandleError {
     MessageSizeError(usize),
 }
 
+// Authority 认证信息
+struct Authority {}
+
 struct DispatchAgent {
     transmitter: Arc<Transmitter>,
+    auth: Option<Authority>,
 }
 
 impl DispatchAgent {
     fn new(transmitter: Arc<Transmitter>) -> Self {
-        DispatchAgent { transmitter }
+        DispatchAgent {
+            transmitter,
+            auth: None,
+        }
     }
     async fn dispatch(&self, header: transmit::MessageHeader, body: Vec<u8>) -> Result<()> {
+        if self.auth.is_none() {
+            log::info!("未登录")
+        }
         // TODO: 处理登录状态
         self.transmitter.dispatch(header, body).await
     }
