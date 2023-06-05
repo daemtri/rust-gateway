@@ -7,10 +7,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
+use std::str::FromStr;
 use tokio::sync::RwLock;
-use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
-use tonic::Request;
 
 pub mod api {
     tonic::include_proto!("transmit");
@@ -26,7 +25,7 @@ struct ServiceEntry {
 
 pub struct Transmitter {
     services: HashMap<String, ServiceEntry>,
-    clients: RwLock<HashMap<u32, Channel>>, // TODO: 取消TransmitClient的锁
+    clients: RwLock<HashMap<u32, Channel>>,
 }
 
 #[derive(Debug)]
@@ -110,7 +109,13 @@ impl Transmitter {
 }
 
 async fn do_dispatch(channel: &Channel, header: MessageHeader, body: Vec<u8>) -> Result<()> {
-    let mut client = BusinessServiceClient::new(channel.clone());
+    let mut client =
+        BusinessServiceClient::with_interceptor(channel.clone(), |mut req: tonic::Request<()>| {
+            let user_id = "123"; // 从某个地方获取用户 ID
+            req.metadata_mut()
+                .insert("user_id", FromStr::from_str(user_id).unwrap());
+            Ok(req)
+        });
     client
         .dispatch(DispatchRequest {
             msgid: header.message_id as i32,
