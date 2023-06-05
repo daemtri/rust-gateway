@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::ReadHalf;
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -15,6 +15,7 @@ use tokio_tungstenite::{accept_async, WebSocketStream};
 use tungstenite::protocol::Message;
 
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Error, Debug)]
 enum HandleError {
