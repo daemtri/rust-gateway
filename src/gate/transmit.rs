@@ -90,7 +90,7 @@ impl Transmitter {
         let clients = self.clients.read().await;
         if clients.contains_key(&app_id) {
             let channel = clients.get(&app_id).unwrap();
-            do_dispatch(channel, header, body).await?;
+            self.do_dispatch(channel, header, body).await?;
         } else {
             drop(clients);
             let mut clients = self.clients.write().await;
@@ -101,24 +101,29 @@ impl Transmitter {
             drop(clients);
             let clients = self.clients.read().await;
             let channel = clients.get(&app_id).unwrap();
-            do_dispatch(channel, header, body).await?;
+            self.do_dispatch(channel, header, body).await?;
         }
 
         Ok(())
     }
-}
 
-async fn do_dispatch(channel: &Channel, header: MessageHeader, body: Vec<u8>) -> Result<()> {
-    BusinessServiceClient::with_interceptor(channel.clone(), |mut req: tonic::Request<()>| {
-        let user_id = "123"; // 从某个地方获取用户 ID
-        req.metadata_mut()
-            .insert("user_id", FromStr::from_str(user_id).unwrap());
-        Ok(req)
-    })
-    .dispatch(DispatchRequest {
-        msgid: header.message_id as i32,
-        data: body,
-    })
-    .await?;
-    Ok(())
+    async fn do_dispatch(
+        &self,
+        channel: &Channel,
+        header: MessageHeader,
+        body: Vec<u8>,
+    ) -> Result<()> {
+        BusinessServiceClient::with_interceptor(channel.clone(), |mut req: tonic::Request<()>| {
+            let user_id = "123"; // 从某个地方获取用户 ID
+            req.metadata_mut()
+                .insert("user_id", FromStr::from_str(user_id).unwrap());
+            Ok(req)
+        })
+        .dispatch(DispatchRequest {
+            msgid: header.message_id as i32,
+            data: body,
+        })
+        .await?;
+        Ok(())
+    }
 }
