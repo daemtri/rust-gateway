@@ -1,5 +1,5 @@
 use anyhow::Result;
-use api::transmit_client::TransmitClient;
+use api::business_service_client::BusinessServiceClient;
 use api::DispatchRequest;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
@@ -24,7 +24,7 @@ struct ServiceEntry {
 
 pub struct Transmitter {
     services: HashMap<String, ServiceEntry>,
-    clients: RwLock<HashMap<u32, Mutex<TransmitClient<Channel>>>>,
+    clients: RwLock<HashMap<u32, Mutex<BusinessServiceClient<Channel>>>>, // TODO: 取消TransmitClient的锁
 }
 
 #[derive(Debug)]
@@ -59,7 +59,7 @@ impl Transmitter {
     fn create_transmit_client(
         &self,
         app_id: u32,
-    ) -> impl Future<Output = TransmitClient<Channel>> + Send {
+    ) -> impl Future<Output = BusinessServiceClient<Channel>> + Send {
         let app_name = format!("app{:03x}", app_id);
         let address = if self.services.contains_key(&app_name) {
             let mut ep = String::new();
@@ -82,7 +82,7 @@ impl Transmitter {
                 .connect()
                 .await
                 .expect(format!("连接主机出错: {}", debug_address).as_str());
-            TransmitClient::new(channel)
+            BusinessServiceClient::new(channel)
         }
     }
 
@@ -112,7 +112,7 @@ impl Transmitter {
 }
 
 async fn do_dispatch(
-    client: &Mutex<TransmitClient<Channel>>,
+    client: &Mutex<BusinessServiceClient<Channel>>,
     header: MessageHeader,
     body: Vec<u8>,
 ) -> Result<()> {

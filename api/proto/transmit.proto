@@ -1,24 +1,54 @@
 syntax = "proto3";
 
-option java_multiple_files = true;
-option java_package = "io.grpc.examples.helloworld";
-option java_outer_classname = "HelloWorldProto";
+option go_package = "api/transmit";
 
 package transmit;
 
-// The greeting service definition.
-service Transmit {
-  // Sends a greeting
-  rpc Dispatch (DispatchRequest) returns (DispatchReply) {}
+// BusinessService 业务服务
+service BusinessService {
+  rpc Dispatch(DispatchRequest) returns (DispatchReply) {}
 }
 
-// The request message containing the user's name.
+// DispatchRequest 各组件接收消息结构
 message DispatchRequest {
   int32 msgid = 1;
   bytes data = 2;
 }
 
-// The response message containing the greetings
 message DispatchReply {
   bytes data = 1;
 }
+
+// Empty 空结果返回
+message Empty {}
+
+//  GatewayControlService  网关控制服务
+service GatewayControlService {
+  rpc Notify(NotifyRequest) returns (Empty) {}
+  rpc BroadCast(BroadCastRequest) returns (Empty) {}
+
+  rpc Kick(KickRequest) returns(Empty) {}
+}
+
+// NotifyRequest gate 消息发送结构
+message NotifyRequest {
+  repeated int64 uids = 1;
+  bytes data = 2;
+}
+
+// BroadCastRequest gate消息广播
+message BroadCastRequest {
+  bytes data = 1;
+}
+
+message KickRequest {
+  int64 uid = 1;
+  enum Reason {
+    NONE = 0;
+    RECONNECT = 1;
+    MessageTooFast = 2;
+  }
+  Reason reason = 2;
+}
+
+
