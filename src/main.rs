@@ -1,5 +1,5 @@
 use futures_channel::mpsc::UnboundedSender;
-use gate::handle::{TcpStreamHandler, WebsocketStreamHandler};
+use gate::multiplier;
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::SocketAddr;
@@ -12,8 +12,6 @@ mod gate;
 
 type _Tx = UnboundedSender<Message>;
 type _PeerMap = Arc<Mutex<HashMap<SocketAddr, _Tx>>>;
-
-const WEBSOCKET_UPGRADE: &str = "Upgrade: websocket";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -28,24 +26,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let (tcp_stream, socket_addr) = lis.accept().await?;
         let transmitter = transmitter.clone();
         tokio::spawn(async move {
-            let mut buffer: [u8; 1024] = [0u8; 1024];
-            if tcp_stream.peek(&mut buffer).await.is_err() {
-                return;
-            }
-            // Convert the request headers to a string
-            // TODO: 这里第一条消息就要判断超时
-            let request = String::from_utf8_lossy(&buffer);
-            if request.contains(WEBSOCKET_UPGRADE) {
-                log::info!("收到新的websocket协议连接请求: {}", socket_addr);
-                WebsocketStreamHandler::new(transmitter)
-                    .handle_stream(tcp_stream, socket_addr)
-                    .await;
-            } else {
-                log::info!("收到新的tcp协议连接请求: {}", socket_addr);
-                TcpStreamHandler::new(transmitter)
-                    .handle_stream(tcp_stream, socket_addr)
-                    .await;
-            }
+            multiplier::handle_stream(transmitter, tcp_stream, socket_addr).await;
         });
     }
 }
