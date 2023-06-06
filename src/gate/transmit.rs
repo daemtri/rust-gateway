@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::transport::Channel;
+use tonic::Request;
 
 pub mod api {
     tonic::include_proto!("transmit");
@@ -114,16 +115,20 @@ impl Transmitter {
         header: MessageHeader,
         body: Vec<u8>,
     ) -> Result<()> {
-        BusinessServiceClient::with_interceptor(channel.clone(), |mut req: tonic::Request<()>| {
-            let user_id = "123"; // 从某个地方获取用户 ID
-            req.metadata_mut()
-                .insert("user_id", FromStr::from_str(user_id).unwrap());
-            Ok(req)
-        })
-        .dispatch(DispatchRequest {
+        let mut req = Request::new(DispatchRequest {
             msgid: header.message_id as i32,
             data: body,
+        });
+        req.metadata_mut()
+            .append("user_id", FromStr::from_str("1").unwrap());
+
+        BusinessServiceClient::with_interceptor(channel.clone(), |mut req: tonic::Request<()>| {
+            let app_id = "123";
+            req.metadata_mut()
+                .insert("app_id", FromStr::from_str(app_id).unwrap());
+            Ok(req)
         })
+        .dispatch(req)
         .await?;
         Ok(())
     }
