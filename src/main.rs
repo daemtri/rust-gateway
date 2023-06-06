@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let (tcp_stream, socket_addr) = lis.accept().await?;
         let transmitter = transmitter.clone();
         tokio::spawn(async move {
-            multiplier::handle_stream(transmitter, tcp_stream, socket_addr).await;
+            multiplier::handle_tcp_stream(transmitter, tcp_stream, socket_addr).await;
         });
     }
 }

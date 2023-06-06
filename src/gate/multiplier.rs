@@ -6,7 +6,7 @@ use tokio::net::TcpStream;
 
 const WEBSOCKET_UPGRADE: &str = "Upgrade: websocket";
 
-pub async fn handle_stream(
+pub async fn handle_tcp_stream(
     transmitter: Arc<Transmitter>,
     tcp_stream: TcpStream,
     socket_addr: SocketAddr,
