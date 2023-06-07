@@ -121,6 +121,7 @@ impl MessageWriter for SplitSink<WebSocketStream<TcpStream>, Message> {
     }
 }
 
+/// 单个客户端连接, 用于处理认证和心跳, 以及转发消息
 pub struct MultipleServer {
     agent: TransmitAgent,
     socket_addr: SocketAddr,
@@ -189,6 +190,15 @@ impl MultipleServer {
     }
 }
 
+/// 处理 TCP 连接
+/// 1. 读取第一条消息，判断是否是 websocket 协议
+/// 2. 如果是 websocket 协议，升级协议
+/// 3. 读取第一条消息，判断是否是 auth 消息
+/// 4. 如果是 auth 消息，验证 auth 消息
+/// 5. 如果验证成功，返回成功消息
+/// 6. 如果验证失败，返回失败消息
+/// 7. 如果不是 auth 消息，返回失败消息
+/// 8. 读取消息，分发消息
 pub async fn handle_tcp_stream(
     transmitter: Arc<Transmitter>,
     socket_addr: SocketAddr,
