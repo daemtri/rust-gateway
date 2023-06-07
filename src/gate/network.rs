@@ -1,6 +1,5 @@
 use super::transmit::{AuthMessage, MessageHeader, TransmitAgent, Transmitter};
 use anyhow::Result;
-use async_trait::async_trait;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
@@ -33,91 +32,89 @@ enum NetworkError {
     AuthMessageIdError,
 }
 
-#[async_trait]
-pub trait MessageReader {
-    async fn read_message(&mut self) -> Result<(MessageHeader, Vec<u8>)>;
+pub enum MessageReceiver {
+    Tcp(ReadHalf<TcpStream>),
+    WebSocket(SplitStream<WebSocketStream<TcpStream>>),
 }
 
-#[async_trait]
-impl MessageReader for ReadHalf<TcpStream> {
-    async fn read_message(&mut self) -> Result<(MessageHeader, Vec<u8>)> {
-        let mut header = [0u8; 8];
-        self.read_exact(&mut header).await?;
-        let header = MessageHeader::from_bytes(&header);
-        if header.body_length > 0 {
-            let mut body = vec![0u8; header.body_length as usize];
-            self.read_exact(&mut body).await?;
-            Ok((header, body))
-        } else {
-            Ok((header, vec![]))
+impl MessageReceiver {
+    pub async fn next_message(&mut self) -> Result<(MessageHeader, Vec<u8>)> {
+        match self {
+            Self::Tcp(reader) => {
+                let mut header = [0u8; 8];
+                reader.read_exact(&mut header).await?;
+                let header = MessageHeader::from_bytes(&header);
+                if header.body_length > 0 {
+                    let mut body = vec![0u8; header.body_length as usize];
+                    reader.read_exact(&mut body).await?;
+                    Ok((header, body))
+                } else {
+                    Ok((header, vec![]))
+                }
+            }
+            Self::WebSocket(reader) => {
+                let msg = reader.next().await.unwrap()?;
+                if !msg.is_binary() {
+                    return Err(NetworkError::MessageTypeNotBinary.into());
+                }
+                let data: Vec<u8> = msg.into_data();
+                if data.len() < 8 {
+                    return Err(NetworkError::MessageSizeError(data.len()).into());
+                }
+
+                let message_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                let body_length = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+
+                if body_length > 0 {
+                    let mut body_buffer = vec![0u8; body_length as usize];
+                    body_buffer.copy_from_slice(&data[8..]);
+                    let message_header = MessageHeader {
+                        message_id,
+                        body_length,
+                    };
+                    Ok((message_header, body_buffer))
+                } else {
+                    let message_header = MessageHeader {
+                        message_id,
+                        body_length,
+                    };
+                    Ok((message_header, vec![]))
+                }
+            }
         }
     }
 }
 
-#[async_trait]
-impl MessageReader for SplitStream<WebSocketStream<TcpStream>> {
-    async fn read_message(&mut self) -> Result<(MessageHeader, Vec<u8>)> {
-        let msg = self.next().await.unwrap()?;
-        if !msg.is_binary() {
-            return Err(NetworkError::MessageTypeNotBinary.into());
-        }
-        let data: Vec<u8> = msg.into_data();
-        if data.len() < 8 {
-            return Err(NetworkError::MessageSizeError(data.len()).into());
-        }
-
-        let message_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let body_length = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
-
-        if body_length > 0 {
-            let mut body_buffer = vec![0u8; body_length as usize];
-            body_buffer.copy_from_slice(&data[8..]);
-            let message_header = MessageHeader {
-                message_id,
-                body_length,
-            };
-            Ok((message_header, body_buffer))
-        } else {
-            let message_header = MessageHeader {
-                message_id,
-                body_length,
-            };
-            Ok((message_header, vec![]))
-        }
-    }
+pub enum MessageSender {
+    Tcp(WriteHalf<TcpStream>),
+    WebSocket(SplitSink<WebSocketStream<TcpStream>, Message>),
 }
 
-#[async_trait]
-pub trait MessageWriter {
-    async fn write_message(&mut self, header: MessageHeader, body: Vec<u8>) -> Result<()>;
-}
-
-#[async_trait]
-impl MessageWriter for WriteHalf<TcpStream> {
-    async fn write_message(&mut self, header: MessageHeader, body: Vec<u8>) -> Result<()> {
-        let mut header_buffer = [0u8; 8];
-        header_buffer[..4].copy_from_slice(&header.message_id.to_be_bytes());
-        header_buffer[4..].copy_from_slice(&header.body_length.to_be_bytes());
-        self.write_all(&header_buffer).await?;
-        if header.body_length > 0 {
-            self.write_all(&body).await?;
+impl MessageSender {
+    pub async fn send_message(&mut self, header: MessageHeader, body: Vec<u8>) -> Result<()> {
+        match self {
+            Self::Tcp(writer) => {
+                let mut header_buffer = [0u8; 8];
+                header_buffer[..4].copy_from_slice(&header.message_id.to_be_bytes());
+                header_buffer[4..].copy_from_slice(&header.body_length.to_be_bytes());
+                writer.write_all(&header_buffer).await?;
+                if header.body_length > 0 {
+                    writer.write_all(&body).await?;
+                }
+                writer.flush().await?;
+                Ok(())
+            }
+            Self::WebSocket(writer) => {
+                let mut header_buffer = [0u8; 8];
+                header_buffer[..4].copy_from_slice(&header.message_id.to_be_bytes());
+                header_buffer[4..].copy_from_slice(&header.body_length.to_be_bytes());
+                let mut buffer = Vec::with_capacity(8 + body.len());
+                buffer.extend_from_slice(&header_buffer);
+                buffer.extend_from_slice(&body);
+                writer.send(Message::Binary(buffer)).await?;
+                Ok(())
+            }
         }
-        self.flush().await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl MessageWriter for SplitSink<WebSocketStream<TcpStream>, Message> {
-    async fn write_message(&mut self, header: MessageHeader, body: Vec<u8>) -> Result<()> {
-        let mut header_buffer = [0u8; 8];
-        header_buffer[..4].copy_from_slice(&header.message_id.to_be_bytes());
-        header_buffer[4..].copy_from_slice(&header.body_length.to_be_bytes());
-        let mut data = Vec::with_capacity(8 + body.len());
-        data.extend_from_slice(&header_buffer);
-        data.extend_from_slice(&body);
-        self.send(Message::Binary(data)).await?;
-        Ok(())
     }
 }
 
@@ -125,22 +122,22 @@ impl MessageWriter for SplitSink<WebSocketStream<TcpStream>, Message> {
 pub struct MultipleServer {
     agent: TransmitAgent,
     socket_addr: SocketAddr,
-    reader: Box<dyn MessageReader + Send + Sync>,
-    writer: Box<dyn MessageWriter + Send + Sync>,
+    receiver: MessageReceiver,
+    sender: MessageSender,
 }
 
 impl MultipleServer {
     pub fn new(
         transmitter: Arc<Transmitter>,
         socket_addr: SocketAddr,
-        reader: Box<dyn MessageReader + Send + Sync>,
-        writer: Box<dyn MessageWriter + Send + Sync>,
+        receiver: MessageReceiver,
+        sender: MessageSender,
     ) -> Self {
         Self {
             agent: TransmitAgent::new(transmitter),
             socket_addr,
-            reader,
-            writer,
+            receiver,
+            sender,
         }
     }
     pub async fn from_tcp_stream(
@@ -156,35 +153,35 @@ impl MultipleServer {
         if request.contains(WEBSOCKET_UPGRADE) {
             let ws_stream = accept_async(tcp_stream).await?;
             let (writer, reader) = ws_stream.split();
-            let reader = Box::new(reader);
-            let writer = Box::new(writer);
-            Ok(Self::new(transmitter, socket_addr, reader, writer))
+            let receiver = MessageReceiver::WebSocket(reader);
+            let sender = MessageSender::WebSocket(writer);
+            Ok(Self::new(transmitter, socket_addr, receiver, sender))
         } else {
             let (reader, writer) = tokio::io::split(tcp_stream);
-            let reader = Box::new(reader);
-            let writer = Box::new(writer);
-            Ok(Self::new(transmitter, socket_addr, reader, writer))
+            let receiver = MessageReceiver::Tcp(reader);
+            let sender = MessageSender::Tcp(writer);
+            Ok(Self::new(transmitter, socket_addr, receiver, sender))
         }
     }
 
     pub async fn auth(&mut self) -> Result<()> {
-        let auth_timer = timeout(AUTH_TIMEOUT, self.reader.read_message()).await?;
+        let auth_timer = timeout(AUTH_TIMEOUT, self.receiver.next_message()).await?;
         let (header, body) = auth_timer?;
         if header.message_id != AUTH_MESSAGE_ID {
             return Err(NetworkError::AuthMessageIdError.into());
         }
         let auth_message = AuthMessage::from_bytes(&body)?;
         self.agent.auth(auth_message).await?;
-        self.writer.write_message(header, vec![]).await?;
+        self.sender.send_message(header, vec![]).await?;
         Ok(())
     }
 
     pub async fn serve(&mut self) -> Result<()> {
         loop {
-            let message_timer = timeout(HEARTBEAT_TIMEOUT, self.reader.read_message()).await?;
+            let message_timer = timeout(HEARTBEAT_TIMEOUT, self.receiver.next_message()).await?;
             let (header, body) = message_timer?;
             if let Err(err) = self.agent.dispatch(header, body).await {
-                log::error!("dispatch message: {}", err);
+                log::error!("dispatch message: {}, addr: {}", err, self.socket_addr);
             }
         }
     }

@@ -21,7 +21,6 @@ tonic= "0.9"
 prost="0.11"
 anyhow = "1.0.71"
 thiserror = "1.0.40"
-async-trait = "0.1.68"
 
 [build-dependencies]
 tonic-build = {version = "0.9",  features = ["prost"] }
