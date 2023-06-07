@@ -36,6 +36,17 @@ pub struct MessageHeader {
     pub body_length: u32,
 }
 
+impl MessageHeader {
+    pub fn from_bytes(bytes: &[u8; 8]) -> MessageHeader {
+        let message_id = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let body_length = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        MessageHeader {
+            message_id,
+            body_length,
+        }
+    }
+}
+
 impl Transmitter {
     pub fn new() -> Self {
         let mut apps_file = File::open("./apps.yaml").expect("read file apps.yaml failed");
@@ -135,7 +146,19 @@ impl Transmitter {
 }
 
 // Authority 认证信息
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct Authority {}
+
+// Authority 认证信息
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AuthMessage {}
+
+impl AuthMessage {
+    pub fn from_bytes(bytes: &[u8]) -> Result<AuthMessage> {
+        let auth_message: AuthMessage = serde_json::from_slice(bytes)?;
+        Ok(auth_message)
+    }
+}
 
 pub struct TransmitAgent {
     transmitter: Arc<Transmitter>,
@@ -150,8 +173,8 @@ impl TransmitAgent {
         }
     }
 
-    pub async fn auth(&mut self, _header: MessageHeader, _body: Vec<u8>) -> Result<()> {
-        log::info!("收到登录请求 {}", _header.message_id);
+    pub async fn auth(&mut self, auth_message: AuthMessage) -> Result<()> {
+        log::info!("收到登录请求 {:?}", auth_message);
         self.auth = Some(Authority {});
         Ok(())
     }

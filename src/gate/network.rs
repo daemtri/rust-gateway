@@ -1,13 +1,14 @@
-use super::transmit::{MessageHeader, TransmitAgent, Transmitter};
+use super::transmit::{AuthMessage, MessageHeader, TransmitAgent, Transmitter};
 use anyhow::Result;
+use async_trait::async_trait;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::io::ReadHalf;
-use tokio::time::{timeout, Instant};
+use tokio::io::{ReadHalf, WriteHalf};
+use tokio::time::timeout;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -15,236 +16,193 @@ use tokio::{
 use tokio_tungstenite::{accept_async, WebSocketStream};
 use tungstenite::protocol::Message;
 
-const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const AUTH_MESSAGE_ID: u32 = 0;
+const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
+const WEBSOCKET_UPGRADE: &str = "Upgrade: websocket";
 
 #[derive(Error, Debug)]
-enum MessageError {
+enum NetworkError {
     #[error("消息长度错误 {0}")]
     MessageSizeError(usize),
     #[error("消息类型不是二进制")]
     MessageTypeNotBinary,
+    // #[error("客户端通道已关闭")]
+    // ClientClosed,
+    #[error("认证消息ID错误")]
+    AuthMessageIdError,
 }
 
-pub struct WebsocketStreamHandler {
+#[async_trait]
+pub trait MessageReader {
+    async fn read_message(&mut self) -> Result<(MessageHeader, Vec<u8>)>;
+}
+
+#[async_trait]
+impl MessageReader for ReadHalf<TcpStream> {
+    async fn read_message(&mut self) -> Result<(MessageHeader, Vec<u8>)> {
+        let mut header = [0u8; 8];
+        self.read_exact(&mut header).await?;
+        let header = MessageHeader::from_bytes(&header);
+        if header.body_length > 0 {
+            let mut body = vec![0u8; header.body_length as usize];
+            self.read_exact(&mut body).await?;
+            Ok((header, body))
+        } else {
+            Ok((header, vec![]))
+        }
+    }
+}
+
+#[async_trait]
+impl MessageReader for SplitStream<WebSocketStream<TcpStream>> {
+    async fn read_message(&mut self) -> Result<(MessageHeader, Vec<u8>)> {
+        let msg = self.next().await.unwrap()?;
+        if !msg.is_binary() {
+            return Err(NetworkError::MessageTypeNotBinary.into());
+        }
+        let data: Vec<u8> = msg.into_data();
+        if data.len() < 8 {
+            return Err(NetworkError::MessageSizeError(data.len()).into());
+        }
+
+        let message_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let body_length = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+
+        if body_length > 0 {
+            let mut body_buffer = vec![0u8; body_length as usize];
+            body_buffer.copy_from_slice(&data[8..]);
+            let message_header = MessageHeader {
+                message_id,
+                body_length,
+            };
+            Ok((message_header, body_buffer))
+        } else {
+            let message_header = MessageHeader {
+                message_id,
+                body_length,
+            };
+            Ok((message_header, vec![]))
+        }
+    }
+}
+
+#[async_trait]
+pub trait MessageWriter {
+    async fn write_message(&mut self, header: MessageHeader, body: Vec<u8>) -> Result<()>;
+}
+
+#[async_trait]
+impl MessageWriter for WriteHalf<TcpStream> {
+    async fn write_message(&mut self, header: MessageHeader, body: Vec<u8>) -> Result<()> {
+        let mut header_buffer = [0u8; 8];
+        header_buffer[..4].copy_from_slice(&header.message_id.to_be_bytes());
+        header_buffer[4..].copy_from_slice(&header.body_length.to_be_bytes());
+        self.write_all(&header_buffer).await?;
+        if header.body_length > 0 {
+            self.write_all(&body).await?;
+        }
+        self.flush().await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl MessageWriter for SplitSink<WebSocketStream<TcpStream>, Message> {
+    async fn write_message(&mut self, header: MessageHeader, body: Vec<u8>) -> Result<()> {
+        let mut header_buffer = [0u8; 8];
+        header_buffer[..4].copy_from_slice(&header.message_id.to_be_bytes());
+        header_buffer[4..].copy_from_slice(&header.body_length.to_be_bytes());
+        let mut data = Vec::with_capacity(8 + body.len());
+        data.extend_from_slice(&header_buffer);
+        data.extend_from_slice(&body);
+        self.send(Message::Binary(data)).await?;
+        Ok(())
+    }
+}
+
+pub struct MultipleServer {
     agent: TransmitAgent,
-    incoming: SplitStream<WebSocketStream<TcpStream>>,
-    outgoing: SplitSink<WebSocketStream<TcpStream>, Message>,
     socket_addr: SocketAddr,
+    reader: Box<dyn MessageReader + Send + Sync>,
+    writer: Box<dyn MessageWriter + Send + Sync>,
 }
 
-impl WebsocketStreamHandler {
-    pub async fn init(
+impl MultipleServer {
+    pub fn new(
         transmitter: Arc<Transmitter>,
-        tcp_stream: TcpStream,
         socket_addr: SocketAddr,
-    ) -> Result<WebsocketStreamHandler> {
-        let ws_stream = accept_async(tcp_stream).await?;
-        let (outgoing, incoming) = ws_stream.split();
-        Ok(WebsocketStreamHandler {
+        reader: Box<dyn MessageReader + Send + Sync>,
+        writer: Box<dyn MessageWriter + Send + Sync>,
+    ) -> Self {
+        Self {
             agent: TransmitAgent::new(transmitter),
-            incoming,
-            outgoing,
             socket_addr,
-        })
+            reader,
+            writer,
+        }
+    }
+    pub async fn from_tcp_stream(
+        transmitter: Arc<Transmitter>,
+        socket_addr: SocketAddr,
+        tcp_stream: TcpStream,
+    ) -> Result<Self> {
+        let mut buffer: [u8; 1024] = [0u8; 1024];
+        tcp_stream.peek(&mut buffer).await?;
+        // Convert the request headers to a string
+        // TODO: 这里第一条消息就要判断超时
+        let request = String::from_utf8_lossy(&buffer);
+        if request.contains(WEBSOCKET_UPGRADE) {
+            let ws_stream = accept_async(tcp_stream).await?;
+            let (writer, reader) = ws_stream.split();
+            let reader = Box::new(reader);
+            let writer = Box::new(writer);
+            Ok(Self::new(transmitter, socket_addr, reader, writer))
+        } else {
+            let (reader, writer) = tokio::io::split(tcp_stream);
+            let reader = Box::new(reader);
+            let writer = Box::new(writer);
+            Ok(Self::new(transmitter, socket_addr, reader, writer))
+        }
     }
 
     pub async fn auth(&mut self) -> Result<()> {
-        let auth_timer = timeout(AUTH_TIMEOUT, self.incoming.next());
-        match auth_timer.await {
-            Ok(Some(Ok(msg))) => {
-                let (header, body) = read_ws_frame(msg).await.unwrap();
-                self.agent.auth(header, body).await.unwrap();
-                Ok(())
-            }
-            Ok(Some(Err(err))) => {
-                // 网络错误
-                Ok(())
-            }
-            Ok(None) => {
-                // stream terminates
-                Ok(())
-            }
-            Err(err) => {
-                // 超时
-                log::error!("Authentication timeout");
-                let _ = self.outgoing.close().await;
-                Err(MessageError::MessageTypeNotBinary.into())
-            }
+        let auth_timer = timeout(AUTH_TIMEOUT, self.reader.read_message()).await?;
+        let (header, body) = auth_timer?;
+        if header.message_id != AUTH_MESSAGE_ID {
+            return Err(NetworkError::AuthMessageIdError.into());
         }
+        let auth_message = AuthMessage::from_bytes(&body)?;
+        self.agent.auth(auth_message).await?;
+        self.writer.write_message(header, vec![]).await?;
+        Ok(())
     }
 
-    async fn handle_websocket() {
-        // 设置超时
-
-        // 启动心跳计时器
-        let mut last_message_time = Instant::now();
+    pub async fn serve(&mut self) -> Result<()> {
         loop {
-            // 检查心跳超时
-            let elapsed = Instant::now().duration_since(last_message_time);
-            if elapsed >= HEARTBEAT_INTERVAL {
-                // 心跳超时，断开连接
-                log::debug!("Heartbeat timeout");
-                break;
-            }
-            let msg_timer = timeout(HEARTBEAT_INTERVAL - elapsed, incoming.next());
-            match msg_timer.await {
-                Ok(Some(Ok(msg))) => match read_ws_frame(msg).await {
-                    Ok((header, body)) => {
-                        last_message_time = Instant::now();
-                        outgoing
-                            .send(Message::Binary("hello world".as_bytes().to_vec()))
-                            .await
-                            .unwrap();
-                        match self.agent.dispatch(header, body).await {
-                            Err(err) => {
-                                log::error!("dispatch message: {}", err);
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Error receiving TCP message: {}", e);
-                        continue;
-                    }
-                },
-                Ok(Some(Err(err))) => {
-                    log::error!("read ws incoming error {}, addr {}", err, addr);
-                    continue;
-                }
-                // 这里有问题
-                Ok(None) => {
-                    continue;
-                }
-                Err(_e) => {
-                    continue;
-                }
+            let message_timer = timeout(HEARTBEAT_TIMEOUT, self.reader.read_message()).await?;
+            let (header, body) = message_timer?;
+            if let Err(err) = self.agent.dispatch(header, body).await {
+                log::error!("dispatch message: {}", err);
             }
         }
     }
 }
 
-async fn read_ws_frame(msg: Message) -> Result<(MessageHeader, Vec<u8>)> {
-    if !msg.is_binary() {
-        return Err(MessageError::MessageTypeNotBinary.into());
-    }
-    let data: Vec<u8> = msg.into_data();
-    if data.len() < 8 {
-        return Err(MessageError::MessageSizeError(data.len()).into());
-    }
-
-    let message_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-    let body_length = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
-
-    // 读取消息体
-    let mut body_buffer = vec![0u8; body_length as usize];
-    body_buffer.copy_from_slice(&data[9..]);
-
-    let message_header = MessageHeader {
-        message_id,
-        body_length,
-    };
-
-    Ok((message_header, body_buffer))
-}
-
-pub struct TcpStreamHandler {
-    agent: TransmitAgent,
-}
-
-impl TcpStreamHandler {
-    pub fn new(transmitter: Arc<Transmitter>) -> TcpStreamHandler {
-        TcpStreamHandler {
-            agent: TransmitAgent::new(transmitter),
-        }
-    }
-
-    pub async fn handle_stream(&mut self, tcp_stream: TcpStream, socket_addr: SocketAddr) {
-        let (mut reader, mut writer) = tokio::io::split(tcp_stream);
-
-        // 设置超时
-        let auth_result = timeout(AUTH_TIMEOUT, async {
-            let (header, body) = read_tcp_frame(&mut reader).await.unwrap();
-            self.agent.auth(header, body).await.unwrap();
-            anyhow::Ok(())
-        })
-        .await;
-
-        if !auth_result.is_ok() {
-            log::error!("Authentication timeout");
-            let _ = writer.shutdown().await;
-            return;
-        }
-
-        // 启动心跳计时器
-        let mut last_message_time = Instant::now();
-
-        loop {
-            // 检查心跳超时
-            let elapsed = Instant::now().duration_since(last_message_time);
-            if elapsed >= HEARTBEAT_INTERVAL {
-                // 心跳超时，断开连接
-                log::debug!("Heartbeat timeout");
-                break;
-            }
-            log::debug!("没有超时，继续尝试读取消息");
-            let msg_timer = timeout(HEARTBEAT_INTERVAL - elapsed, read_tcp_frame(&mut reader));
-            match msg_timer.await {
-                Ok(Ok((header, body))) => {
-                    last_message_time = Instant::now();
-                    if let Err(e) = writer.write_all(b"hello world").await {
-                        log::error!("Failed to send TCP message: {}, addr: {}", e, socket_addr);
-                        break;
-                    }
-                    match self.agent.dispatch(header, body).await {
-                        Err(err) => {
-                            log::error!("dispatch message: {}", err);
-                            continue;
-                        }
-                        _ => {
-                            continue;
-                        }
-                    }
-                }
-                Ok(Err(err)) => {
-                    log::error!("Error receiving TCP message: {}", err);
-                    continue;
-                }
-                Err(_e) => {
-                    continue;
-                }
-            }
-        }
-    }
-}
-
-async fn read_tcp_frame(tcp_stream: &mut ReadHalf<TcpStream>) -> Result<(MessageHeader, Vec<u8>)> {
-    // 读取消息头
-    let mut header_buffer = [0u8; 8]; // 假设消息头的长度为 8 字节
-    tcp_stream.read_exact(&mut header_buffer).await?;
-
-    let message_id = u32::from_be_bytes([
-        header_buffer[0],
-        header_buffer[1],
-        header_buffer[2],
-        header_buffer[3],
-    ]);
-    let body_length = u32::from_be_bytes([
-        header_buffer[4],
-        header_buffer[5],
-        header_buffer[6],
-        header_buffer[7],
-    ]);
-
-    // 读取消息体
-    let mut body_buffer = vec![0u8; body_length as usize];
-    tcp_stream.read_exact(&mut body_buffer).await?;
-
-    let message_header = MessageHeader {
-        message_id,
-        body_length,
-    };
-
-    Ok((message_header, body_buffer))
+pub async fn handle_tcp_stream(
+    transmitter: Arc<Transmitter>,
+    socket_addr: SocketAddr,
+    tcp_stream: TcpStream,
+) -> Result<()> {
+    timeout(AUTH_TIMEOUT, async move {
+        let mut server = MultipleServer::from_tcp_stream(transmitter, socket_addr, tcp_stream)
+            .await
+            .unwrap();
+        server.auth().await.unwrap();
+        server
+    })
+    .await
+    .unwrap()
+    .serve()
+    .await
 }

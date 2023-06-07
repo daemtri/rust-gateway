@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
-pub mod handle;
-pub mod multiplier;
 pub mod network;
 pub mod transmit;
 
@@ -14,7 +12,9 @@ pub async fn tcp_serve(
         let (tcp_stream, socket_addr) = lis.accept().await.unwrap();
         let transmitter = transmitter.clone();
         tokio::spawn(async move {
-            multiplier::handle_tcp_stream(transmitter, tcp_stream, socket_addr).await;
+            network::handle_tcp_stream(transmitter, socket_addr, tcp_stream)
+                .await
+                .unwrap();
         });
     }
 }
