@@ -170,9 +170,12 @@ impl MultipleServer {
         if header.message_id != AUTH_MESSAGE_ID {
             return Err(NetworkError::AuthMessageIdError.into());
         }
+        log::debug!("认证成功1");
         let auth_message = AuthMessage::from_bytes(&body)?;
         self.agent.auth(auth_message).await?;
         self.sender.send_message(header, vec![]).await?;
+
+        log::debug!("认证成功");
         Ok(())
     }
 
@@ -208,8 +211,7 @@ pub async fn handle_tcp_stream(
         server.auth().await.unwrap();
         server
     })
-    .await
-    .unwrap()
+    .await?
     .serve()
     .await
 }

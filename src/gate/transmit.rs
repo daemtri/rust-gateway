@@ -155,7 +155,8 @@ pub struct AuthMessage {}
 
 impl AuthMessage {
     pub fn from_bytes(bytes: &[u8]) -> Result<AuthMessage> {
-        let auth_message: AuthMessage = serde_json::from_slice(bytes)?;
+        let auth_message: AuthMessage =
+            serde_json::from_slice(bytes).expect("parse auth message json failed");
         Ok(auth_message)
     }
 }
