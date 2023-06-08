@@ -1,12 +1,15 @@
 use anyhow::Result;
 use api::business_service_client::BusinessServiceClient;
 use api::DispatchRequest;
+use futures_channel::mpsc::UnboundedSender;
+use futures_util::lock::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use std::collections::HashMap;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -16,6 +19,9 @@ use tonic::Request;
 pub mod api {
     tonic::include_proto!("transmit");
 }
+
+type Tx = UnboundedSender<(MessageHeader, Vec<u8>)>;
+type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct ServiceEntry {
@@ -28,6 +34,7 @@ struct ServiceEntry {
 pub struct Transmitter {
     services: HashMap<String, ServiceEntry>,
     clients: RwLock<HashMap<u32, Channel>>,
+    peer_map: PeerMap,
 }
 
 #[derive(Debug)]
@@ -67,6 +74,7 @@ impl Transmitter {
         Transmitter {
             services: apps_map,
             clients: RwLock::new(HashMap::new()),
+            peer_map: PeerMap::new(Mutex::new(HashMap::new())),
         }
     }
 

@@ -1,16 +1,9 @@
-use futures_channel::mpsc::UnboundedSender;
-use std::collections::HashMap;
 use std::error::Error;
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
-use tungstenite::protocol::Message;
 
 mod gate;
-
-type _Tx = UnboundedSender<Message>;
-type _PeerMap = Arc<Mutex<HashMap<SocketAddr, _Tx>>>;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
