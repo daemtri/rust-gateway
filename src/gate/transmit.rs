@@ -1,8 +1,8 @@
 use anyhow::Result;
 use api::business_service_client::BusinessServiceClient;
 use api::DispatchRequest;
-use futures_channel::mpsc::UnboundedSender;
-use futures_util::lock::Mutex;
+use futures::channel::mpsc::UnboundedSender;
+use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ struct ServiceEntry {
 pub struct Transmitter {
     services: HashMap<String, ServiceEntry>,
     clients: RwLock<HashMap<u32, Channel>>,
-    peer_map: PeerMap,
+    _peer_map: PeerMap,
 }
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ impl Transmitter {
         Transmitter {
             services: apps_map,
             clients: RwLock::new(HashMap::new()),
-            peer_map: PeerMap::new(Mutex::new(HashMap::new())),
+            _peer_map: PeerMap::new(Mutex::new(HashMap::new())),
         }
     }
 

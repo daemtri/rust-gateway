@@ -1,7 +1,7 @@
 use super::transmit::{AuthMessage, MessageHeader, TransmitAgent, Transmitter};
 use anyhow::Result;
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
+use futures::stream::{SplitSink, SplitStream};
+use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
