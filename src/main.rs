@@ -1,3 +1,4 @@
+use gate::transmit::{Options, Transmitter};
 use std::error::Error;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -12,7 +13,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let addr = "0.0.0.0:8080";
     let lis = TcpListener::bind(addr).await.unwrap();
     log::info!("tcp listen on {}", addr);
-    let transmitter = Arc::new(gate::transmit::Transmitter::new());
+    let transmitter = Arc::new(Transmitter::new(vec![Options::AppsFile(
+        "apps.yaml".into(),
+    )]));
 
     tokio::select! {
         _ = gate::tcp_serve(lis,transmitter) => {

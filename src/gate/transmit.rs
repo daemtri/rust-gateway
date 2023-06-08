@@ -54,28 +54,46 @@ impl MessageHeader {
     }
 }
 
-impl Transmitter {
-    pub fn new() -> Self {
-        let mut apps_file = File::open("./apps.yaml").expect("read file apps.yaml failed");
-        let mut yaml_str = String::new();
-        apps_file
-            .read_to_string(&mut yaml_str)
-            .expect("read file error");
-        let apps_config: Vec<ServiceEntry> =
-            serde_yaml::from_str(&yaml_str).expect("parse yaml failed");
+pub enum Options {
+    AppsFile(String),
+}
 
-        log::info!("AppsConfig: {:#?}", apps_config);
+impl Options {
+    fn apply(self, transmitter: &mut Transmitter) {
+        match self {
+            Options::AppsFile(file) => {
+                let mut apps_file = File::open(file).expect("read file apps.yaml failed");
+                let mut yaml_str = String::new();
+                apps_file
+                    .read_to_string(&mut yaml_str)
+                    .expect("read file error");
+                let apps_config: Vec<ServiceEntry> =
+                    serde_yaml::from_str(&yaml_str).expect("parse yaml failed");
 
-        let mut apps_map = HashMap::<String, ServiceEntry>::new();
-        for (_, item) in apps_config.iter().enumerate() {
-            apps_map.insert(item.name.clone(), item.clone());
+                log::info!("AppsConfig: {:#?}", apps_config);
+
+                let mut apps_map = HashMap::<String, ServiceEntry>::new();
+                for (_, item) in apps_config.iter().enumerate() {
+                    apps_map.insert(item.name.clone(), item.clone());
+                }
+
+                transmitter.services = apps_map;
+            }
         }
+    }
+}
 
-        Transmitter {
-            services: apps_map,
+impl Transmitter {
+    pub fn new(opts: Vec<Options>) -> Self {
+        let mut transmitter = Transmitter {
+            services: HashMap::new(),
             clients: RwLock::new(HashMap::new()),
             _peer_map: PeerMap::new(Mutex::new(HashMap::new())),
+        };
+        for opt in opts {
+            opt.apply(&mut transmitter);
         }
+        transmitter
     }
 
     fn create_transmit_channel(&self, app_id: u32) -> impl Future<Output = Channel> + Send {
