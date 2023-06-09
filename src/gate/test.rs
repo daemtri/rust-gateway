@@ -3,17 +3,15 @@ use std::future::Future;
 use std::io::Result;
 
 pub trait Tester {
-    type Future<'a>: Future<Output = Result<()>>
-    where
-        Self: 'a;
+    type Future: Future<Output = Result<()>>;
 
-    fn test(&self) -> Self::Future<'_>;
+    fn test(&self) -> Self::Future;
 }
 
 impl Tester for String {
-    type Future<'a> = BoxFuture<'a, Result<()>>;
+    type Future = BoxFuture<'static, Result<()>>;
 
-    fn test(&self) -> Self::Future<'_> {
+    fn test(&self) -> Self::Future {
         Box::pin(async move { Ok(()) })
     }
 }
